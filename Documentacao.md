@@ -1,0 +1,281 @@
+# AV3 – Banco de Dados Relacional: Partes 4
+
+Projeto: Gestão de Serviços, Projetos e Ordens de Serviço · SGBD: MySQL 8.0.16+ · Banco: `gestao_servicos`
+
+## Parte 4 – Documentação do Banco de Dados (Dicionário de Dados)
+
+O banco `gestao_servicos` possui 14 tabelas (charset `utf8mb4`, engine InnoDB). Legenda das colunas: **PK** = chave primária, **FK** = chave estrangeira, **UK** = chave única (UNIQUE), **NN** = NOT NULL.
+
+### 4.1 clientes
+
+Empresas contratantes dos serviços.
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| id | INT | PK | NN | AUTO\_INCREMENT. Identificador do cliente. |
+| nome | VARCHAR(191) | UK | NN | Nome fantasia; não pode repetir. |
+| razao\_social | VARCHAR(191) | UK | NN | Razão social; não pode repetir. |
+| ramo\_atuacao | VARCHAR(191) | – | NN | Segmento de atuação (ex.: Energia, Logística). |
+| ativo | BOOLEAN | – | NN | DEFAULT TRUE. Indica se o cliente está ativo. |
+
+### 4.2 departamentos
+
+Departamentos internos da empresa prestadora.
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| id | INT | PK | NN | AUTO\_INCREMENT. |
+| responsavel\_id | INT | FK | Aceita NULL | Referencia `funcionarios(id)` (`fk_departamento_responsavel_funcionario`). Gestor do departamento. A FK é criada via ALTER TABLE por causa da dependência circular com `funcionarios`. |
+| nome | VARCHAR(191) | UK | NN | Nome do departamento; único. |
+
+### 4.3 funcionarios
+
+Usuários do sistema (gestores e técnicos).
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| id | INT | PK | NN | AUTO\_INCREMENT. |
+| departamento\_id | INT | FK | NN | Referencia `departamentos(id)`. |
+| usuario | VARCHAR(191) | UK | NN | Login do usuário; único. |
+| senha\_hash | VARCHAR(255) | – | NN | Hash da senha (nunca a senha em texto puro). |
+| nome | VARCHAR(191) | – | NN | Nome completo. |
+| tipo | ENUM('gestor','tecnico') | – | NN | DEFAULT 'tecnico'. Perfil do funcionário. |
+| ativo | BOOLEAN | – | NN | DEFAULT TRUE. |
+
+### 4.4 locais\_operacionais
+
+Unidades/locais de operação de cada cliente.
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| id | INT | PK | NN | AUTO\_INCREMENT. |
+| cliente\_id | INT | FK | NN | Referencia `clientes(id)`. |
+| descricao | VARCHAR(191) | – | NN | Descrição do local. |
+| tipo | ENUM('offshore','onshore') | – | NN | Tipo do ambiente de operação. |
+
+Restrição adicional: `uk_local_id_cliente` UNIQUE (id, cliente\_id), necessária para a FK composta de `ordens_servico`, que garante que o local pertence ao mesmo cliente da OS.
+
+### 4.5 projetos
+
+Projetos contratados por um cliente.
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| id | INT | PK | NN | AUTO\_INCREMENT. |
+| cliente\_id | INT | FK | NN | Referencia `clientes(id)`. |
+| data\_inicio | DATETIME | – | Aceita NULL | Início do projeto. |
+| data\_fim | DATETIME | – | Aceita NULL | Término do projeto. |
+| status | ENUM('em\_planejamento','em\_andamento','pausado','concluido') | – | NN | DEFAULT 'em\_planejamento'. |
+| nome | VARCHAR(191) | – | NN | Nome do projeto. |
+| ativo | BOOLEAN | – | NN | DEFAULT TRUE. |
+
+Restrições adicionais:
+
+- `uk_projeto_id_cliente` UNIQUE (id, cliente\_id): permite a FK composta de `ordens_servico`.
+- `chk_projeto_datas`: `data_fim` deve ser maior ou igual a `data_inicio` (quando ambas existem).
+- `chk_projeto_concluido`: projeto com status 'concluido' exige `data_fim` preenchida.
+
+### 4.6 feriados
+
+Calendário de feriados usado no cálculo de prazos em dias úteis.
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| id | INT | PK | NN | AUTO\_INCREMENT. |
+| data | DATE | UK (com descricao) | NN | Data do feriado. |
+| descricao | VARCHAR(191) | UK (com data) | NN | Nome do feriado. |
+| abrangencia | ENUM('nacional','estadual','municipal') | – | NN | DEFAULT 'nacional'. |
+| uf | CHAR(2) | – | Aceita NULL | Estado (obrigatório para estadual e municipal). |
+| municipio | VARCHAR(191) | – | Aceita NULL | Município (obrigatório só para municipal). |
+
+Restrições adicionais: `uk_feriado` UNIQUE (data, descricao); `chk_feriado_abrangencia` exige: nacional sem uf/município, estadual com uf e sem município, municipal com uf e município.
+
+### 4.7 sla\_config
+
+Configuração padrão de SLA por tipo de serviço e criticidade.
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| id | INT | PK | NN | AUTO\_INCREMENT. |
+| tipo | ENUM('instalacao','manutencao') | UK (com criticidade) | NN | Tipo de serviço. |
+| criticidade | ENUM('baixo','medio','alto','muito\_alto','urgente') | UK (com tipo) | NN | Nível de criticidade. |
+| prazo\_dias\_uteis | INT | – | NN | Prazo em dias úteis. |
+
+Restrições adicionais: `config_unica` UNIQUE (tipo, criticidade); `chk_sla_prazo_positivo` (prazo\_dias\_uteis > 0).
+
+### 4.8 ordens\_servico
+
+Tabela central do sistema: ordens de serviço (OS).
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| id | INT | PK | NN | AUTO\_INCREMENT. |
+| departamento\_id | INT | FK | NN | Referencia `departamentos(id)`. |
+| cliente\_id | INT | FK | NN | Referencia `clientes(id)`. |
+| solicitante\_id | INT | FK | NN | Referencia `funcionarios(id)`. Quem abriu a OS. |
+| responsavel\_id | INT | FK | Aceita NULL | Referencia `funcionarios(id)`. Responsável pela execução. |
+| projeto\_id | INT | FK (composta) | Aceita NULL | Referencia `projetos(id, cliente_id)`. |
+| local\_id | INT | FK (composta) | Aceita NULL | Referencia `locais_operacionais(id, cliente_id)`. |
+| anterior\_id | INT | FK | Aceita NULL | Autorrelacionamento com `ordens_servico(id)`: OS anterior. |
+| parecer\_tecnico | TEXT | – | Aceita NULL | Parecer técnico final. |
+| tipo | ENUM('instalacao','manutencao') | – | NN | DEFAULT 'instalacao'. |
+| criticidade | ENUM('baixo','medio','alto','muito\_alto','urgente') | – | NN | DEFAULT 'medio'. |
+| titulo | VARCHAR(191) | – | NN | Título da OS. |
+| descricao | TEXT | – | NN | Descrição detalhada. |
+| status | ENUM('em\_andamento','aguardando','validacao\_testes','bloqueado','concluido') | – | NN | DEFAULT 'em\_andamento'. |
+| data\_criacao | DATETIME | – | NN | DEFAULT CURRENT\_TIMESTAMP. |
+| data\_inicio | DATETIME | – | Aceita NULL | Início da execução. |
+| data\_fim | DATETIME | – | Aceita NULL | Fim da execução. |
+| data\_limite\_sla | DATETIME | – | Aceita NULL | Prazo final calculado pelo SLA. |
+| sla\_manual | BOOLEAN | – | NN | DEFAULT FALSE. Indica SLA definido manualmente. |
+| prazo\_dias\_uteis | INT | – | Aceita NULL | Prazo manual (só com SLA manual). |
+| justificativa\_sla\_manual | TEXT | – | Aceita NULL | Justificativa do SLA manual. |
+| ativo | BOOLEAN | – | NN | DEFAULT TRUE. |
+
+Restrições adicionais:
+
+- As FKs compostas `fk_os_projeto` (projeto\_id, cliente\_id) e `fk_os_local` (local\_id, cliente\_id) garantem que projeto e local pertençam ao mesmo cliente da OS.
+- `chk_os_datas`: `data_fim` maior ou igual a `data_inicio`.
+- `chk_os_concluida_com_data_fim`: OS 'concluido' exige `data_fim`.
+- `chk_os_sla_manual`: se `sla_manual = 0`, prazo e justificativa devem ser NULL; se `sla_manual = 1`, prazo deve ser maior que 0 e a justificativa obrigatória.
+- Índices: `idx_os_criticidade_limite` (criticidade, data\_limite\_sla), `idx_os_departamento_status` (departamento\_id, status), `idx_os_responsavel_status` (responsavel\_id, status).
+
+### 4.9 anexos
+
+Arquivos anexados às OS.
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| id | INT | PK | NN | AUTO\_INCREMENT. |
+| os\_id | INT | FK | NN | Referencia `ordens_servico(id)`. |
+| enviado\_por\_id | INT | FK | NN | Referencia `funcionarios(id)`. |
+| nome | VARCHAR(255) | – | NN | Nome do arquivo. |
+| tipo\_mime | VARCHAR(100) | – | NN | Tipo MIME (ex.: image/png). |
+| tamanho\_bytes | BIGINT | – | NN | Tamanho em bytes (trigger exige valor positivo). |
+| caminho | VARCHAR(191) | UK | NN | Caminho de armazenamento; único. |
+| data\_upload | DATETIME(6) | – | NN | DEFAULT CURRENT\_TIMESTAMP(6). |
+| descricao | TEXT | – | Aceita NULL | Descrição do anexo. |
+
+Índice: `idx_anexos_os_data` (os\_id, data\_upload).
+
+### 4.10 auditoria
+
+Histórico de alterações das OS.
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| id | INT | PK | NN | AUTO\_INCREMENT. |
+| os\_id | INT | FK | NN | Referencia `ordens_servico(id)`. |
+| funcionario\_id | INT | FK | Aceita NULL | Referencia `funcionarios(id)`. NULL = alteração automática/sistema. |
+| data\_modificacao | DATETIME(6) | – | NN | DEFAULT CURRENT\_TIMESTAMP(6). |
+| acao | ENUM('insercao','atualizacao','exclusao') | – | NN | Tipo da ação. |
+| campo\_alterado | VARCHAR(191) | – | Aceita NULL | Campo modificado. |
+| dado\_antigo | TEXT | – | Aceita NULL | Valor anterior. |
+| dado\_novo | TEXT | – | Aceita NULL | Novo valor. |
+| justificativa | TEXT | – | Aceita NULL | Motivo da alteração. |
+
+Índice: `idx_auditoria_os_data` (os\_id, data\_modificacao).
+
+### 4.11 equipes
+
+Tabela associativa (N:N) entre funcionários e OS: define a equipe de cada OS.
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| funcionario\_id | INT | PK (composta) + FK | NN | Referencia `funcionarios(id)`. |
+| os\_id | INT | PK (composta) + FK | NN | Referencia `ordens_servico(id)`. |
+
+A PK composta (funcionario\_id, os\_id) impede o mesmo funcionário duas vezes na mesma OS.
+
+### 4.12 apontamento\_horas
+
+Horas trabalhadas por funcionário em cada OS.
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| id | INT | PK | NN | AUTO\_INCREMENT. |
+| funcionario\_id | INT | FK | NN | Referencia `funcionarios(id)`. |
+| os\_id | INT | FK | NN | Referencia `ordens_servico(id)`. |
+| data\_trabalho | DATE | – | NN | Dia em que o trabalho foi feito. |
+| duracao\_minutos | INT | – | NN | CHECK `chk_duracao_positiva` (maior que 0). |
+| descricao | TEXT | – | Aceita NULL | Atividade realizada. |
+| data\_criacao | DATETIME(6) | – | NN | DEFAULT CURRENT\_TIMESTAMP(6). |
+
+Índice: `idx_apontamentos_funcionario_data` (funcionario\_id, data\_trabalho).
+
+### 4.13 auditoria\_projetos
+
+Histórico de alterações dos projetos.
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| id | INT | PK | NN | AUTO\_INCREMENT. |
+| projeto\_id | INT | FK | NN | Referencia `projetos(id)`. |
+| funcionario\_id | INT | FK | Aceita NULL | Referencia `funcionarios(id)`. NULL = alteração automática. |
+| data\_modificacao | DATETIME(6) | – | NN | DEFAULT CURRENT\_TIMESTAMP(6). |
+| acao | ENUM('insercao','atualizacao','exclusao') | – | NN | Tipo da ação. |
+| campo\_alterado | VARCHAR(191) | – | Aceita NULL | Campo modificado. |
+| dado\_antigo | TEXT | – | Aceita NULL | Valor anterior. |
+| dado\_novo | TEXT | – | Aceita NULL | Novo valor. |
+| justificativa | TEXT | – | Aceita NULL | Motivo da alteração. |
+
+Índice: `idx_auditoria_projetos_data` (projeto\_id, data\_modificacao).
+
+### 4.14 projetos\_departamentos
+
+Tabela associativa (N:N) entre projetos e departamentos envolvidos.
+
+| Campo | Tipo | Chave | Nulo | Restrições / descrição |
+| --- | --- | --- | --- | --- |
+| projeto\_id | INT | PK (composta) + FK | NN | Referencia `projetos(id)`. |
+| departamento\_id | INT | PK (composta) + FK | NN | Referencia `departamentos(id)`. |
+
+### 4.15 Resumo dos relacionamentos (chaves estrangeiras)
+
+| Tabela (filha) | Coluna(s) | Referencia (pai) | Cardinalidade |
+| --- | --- | --- | --- |
+| funcionarios | departamento\_id | departamentos(id) | N:1 |
+| departamentos | responsavel\_id | funcionarios(id) | N:1 (opcional) |
+| locais\_operacionais | cliente\_id | clientes(id) | N:1 |
+| projetos | cliente\_id | clientes(id) | N:1 |
+| ordens\_servico | departamento\_id | departamentos(id) | N:1 |
+| ordens\_servico | cliente\_id | clientes(id) | N:1 |
+| ordens\_servico | solicitante\_id, responsavel\_id | funcionarios(id) | N:1 |
+| ordens\_servico | (projeto\_id, cliente\_id) | projetos(id, cliente\_id) | N:1 (opcional) |
+| ordens\_servico | (local\_id, cliente\_id) | locais\_operacionais(id, cliente\_id) | N:1 (opcional) |
+| ordens\_servico | anterior\_id | ordens\_servico(id) | N:1 (autorrelacionamento) |
+| anexos | os\_id, enviado\_por\_id | ordens\_servico(id), funcionarios(id) | N:1 |
+| auditoria | os\_id, funcionario\_id | ordens\_servico(id), funcionarios(id) | N:1 |
+| equipes | funcionario\_id, os\_id | funcionarios(id), ordens\_servico(id) | N:N |
+| apontamento\_horas | funcionario\_id, os\_id | funcionarios(id), ordens\_servico(id) | N:1 |
+| auditoria\_projetos | projeto\_id, funcionario\_id | projetos(id), funcionarios(id) | N:1 |
+| projetos\_departamentos | projeto\_id, departamento\_id | projetos(id), departamentos(id) | N:N |
+
+A tabela `feriados` e a tabela `sla_config` não possuem chaves estrangeiras: são tabelas de parametrização consultadas para calcular `data_limite_sla`.
+
+### 4.16 Objetos programáveis do banco
+
+| Tipo | Nome | Finalidade |
+| --- | --- | --- |
+| View | vw\_resumo\_ordens | Resumo das OS com cliente, departamento, responsável, SLA e total de minutos. |
+| View | vw\_horas\_funcionario | Quantidade de apontamentos e minutos trabalhados por funcionário. |
+| View | vw\_projetos\_clientes | Projetos com seu cliente e a quantidade de OS. |
+| Function | fn\_total\_horas\_os(os\_id) | Total de horas apontadas em uma OS. |
+| Function | fn\_quantidade\_os\_funcionario(funcionario\_id) | Quantidade de OS em que o funcionário está na equipe. |
+| Function | fn\_status\_cliente(cliente\_id) | Retorna ATIVO, INATIVO ou NAO ENCONTRADO. |
+| Function | fn\_media\_horas\_departamento(departamento\_id) | Média de horas por apontamento no departamento. |
+| Function | fn\_os\_atrasadas\_cliente(cliente\_id) | Quantidade de OS não concluídas com SLA vencido. |
+| Function | fn\_percentual\_conclusao\_projeto(projeto\_id) | Percentual de OS concluídas do projeto. |
+| Procedure | sp\_listar\_os\_cliente | Lista as OS de um cliente. |
+| Procedure | sp\_resumo\_departamentos | Total de OS e concluídas por departamento. |
+| Procedure | sp\_registrar\_apontamento | Registra horas trabalhadas, validando a duração. |
+| Procedure | sp\_atualizar\_status\_os | Altera o status da OS com validação e auditoria. |
+| Procedure | sp\_relatorio\_horas\_periodo | Horas por funcionário em um período. |
+| Procedure | sp\_processar\_fila\_os | Move as OS 'aguardando' para 'em\_andamento' usando cursor, por criticidade. |
+| Trigger | trg\_os\_auditoria\_insert | Grava auditoria ao criar uma OS. |
+| Trigger | trg\_os\_auditoria\_update | Grava auditoria quando o status da OS muda. |
+| Trigger | trg\_os\_preencher\_data\_fim | Preenche `data_fim` ao concluir a OS. |
+| Trigger | trg\_apontamento\_validar | Bloqueia apontamento com duração menor ou igual a zero. |
+| Trigger | trg\_projeto\_auditoria\_update | Grava auditoria quando o status do projeto muda. |
+| Trigger | trg\_anexo\_validar\_tamanho | Bloqueia anexo com tamanho menor ou igual a zero. |
+

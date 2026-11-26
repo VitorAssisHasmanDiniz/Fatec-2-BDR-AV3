@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gestão de Serviços</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div><p class="eyebrow">PAINEL OPERACIONAL</p><h1>Gestão de Serviços</h1><p>Consultas e operações usando rotinas SQL do banco.</p></div>
+    <span id="conexao" class="badge">Verificando banco...</span>
+  </header>
+  <main>
+    <section class="card">
+      <h2>Indicadores por cliente</h2>
+      <div class="linha"><label for="cliente">Cliente</label><select id="cliente"></select><button id="consultarCliente">Consultar</button></div>
+      <div class="metricas"><article><small>Status do cliente</small><strong id="statusCliente">—</strong></article><article><small>OS atrasadas</small><strong id="atrasadas">—</strong></article></div>
+      <div id="ordensCliente" class="resultado"></div>
+    </section>
+    <section class="card">
+      <h2>Horas de uma ordem de serviço</h2>
+      <div class="linha"><label for="osHoras">ID da OS</label><input id="osHoras" type="number" min="1" placeholder="Ex: 1"><button id="consultarHoras">Consultar horas</button></div>
+      <p class="resultado destaque" id="resultadoHoras">—</p>
+    </section>
+    <section class="card">
+      <h2>Progresso do projeto</h2>
+      <div class="linha"><label for="projetoId">ID do projeto</label><input id="projetoId" type="number" min="1" placeholder="Ex: 1"><button id="consultarProjeto">Consultar</button></div>
+      <div class="barra"><div id="barraProjeto"></div></div><p id="progressoProjeto">—</p>
+    </section>
+    <section class="card">
+      <h2>Registrar apontamento de horas</h2>
+      <form id="formApontamento">
+        <div class="grid">
+          <label>Funcionário ID<input name="funcionario_id" type="number" min="1" required></label>
+          <label>OS ID<input name="os_id" type="number" min="1" required></label>
+          <label>Data<input name="data" type="date"></label>
+          <label>Duração (minutos)<input name="minutos" type="number" min="1" required></label>
+        </div>
+        <label>Descrição<input name="descricao" placeholder="Atividade realizada"></label><button>Registrar apontamento</button>
+      </form><p id="mensagemApontamento" class="resultado"></p>
+    </section>
+    <section class="card">
+      <h2>Atualizar status da OS</h2>
+      <form id="formStatus">
+        <div class="grid">
+          <label>OS ID<input name="id" type="number" min="1" required></label>
+          <label>Funcionário ID<input name="funcionario_id" type="number" min="1" required></label>
+          <label>Status<select name="status"><option value="em_andamento">Em andamento</option><option value="aguardando">Aguardando</option><option value="validacao_testes">Validação de testes</option><option value="bloqueado">Bloqueado</option><option value="concluido">Concluído</option></select></label>
+        </div>
+        <label>Justificativa<input name="justificativa" required placeholder="Motivo da mudança"></label><button>Atualizar status</button>
+      </form><p id="mensagemStatus" class="resultado"></p>
+    </section>
+    <section class="card">
+      <h2>Resumo por departamento</h2><button id="consultarDepartamentos">Atualizar resumo</button><div id="departamentos" class="resultado"></div>
+    </section>
+    <section class="card">
+      <h2>Relatório de horas</h2>
+      <div class="linha"><label>Início<input id="inicio" type="date" required></label><label>Fim<input id="fim" type="date" required></label><button id="relatorio">Gerar relatório</button></div><div id="relatorioHoras" class="resultado"></div>
+    </section>
+    <section class="card">
+      <h2>Processar fila de OS aguardando</h2><p>Executa a procedure com cursor que movimenta as OS aguardando para em andamento.</p><button id="processarFila">Processar fila</button><p id="filaResultado" class="resultado"></p>
+    </section>
+  </main>
+  <script src="script.js"></script>
+</body>
+</html>

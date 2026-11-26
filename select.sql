@@ -1,38 +1,16 @@
--- ============================================================
--- ARQUIVO 3 DE 3: VIEWS, FUNCTIONS, PROCEDURES, TRIGGERS E CONSULTAS DE TESTE
--- Execute depois do 01_criacao.sql e do 02_insercao.sql.
--- Pode ser reexecutado quantas vezes quiser (faz DROP IF EXISTS antes de criar).
--- Se rodar de novo depois de testar, rode 01 e 02 antes para restaurar os dados.
--- ============================================================
-
 USE gestao_servicos;
 
--- Remove functions e procedures antigas (os triggers somem junto com as tabelas)
-DROP FUNCTION IF EXISTS fn_total_horas_os;
-DROP FUNCTION IF EXISTS fn_quantidade_os_funcionario;
-DROP FUNCTION IF EXISTS fn_status_cliente;
-DROP FUNCTION IF EXISTS fn_media_horas_departamento;
-DROP FUNCTION IF EXISTS fn_os_atrasadas_cliente;
-DROP FUNCTION IF EXISTS fn_percentual_conclusao_projeto;
-DROP PROCEDURE IF EXISTS sp_listar_os_cliente;
-DROP PROCEDURE IF EXISTS sp_resumo_departamentos;
-DROP PROCEDURE IF EXISTS sp_registrar_apontamento;
-DROP PROCEDURE IF EXISTS sp_atualizar_status_os;
-DROP PROCEDURE IF EXISTS sp_relatorio_horas_periodo;
-DROP PROCEDURE IF EXISTS sp_processar_fila_os;
-
--- 3. VIEWS (consultas reutilizáveis)
 CREATE OR REPLACE VIEW vw_resumo_ordens AS
 SELECT os.id, os.titulo, os.status, os.criticidade, c.nome AS cliente,
        d.nome AS departamento, f.nome AS responsavel,
-       COALESCE(os.prazo_dias_uteis, s.prazo_dias_uteis) AS prazo_dias_uteis,
+       os.prazo_dias_uteis,
        os.data_limite_sla,
        COALESCE(h.total_minutos, 0) AS total_minutos
 FROM ordens_servico os
 INNER JOIN departamentos d ON d.id = os.departamento_id
-INNER JOIN clientes c ON c.id = os.cliente_id
+INNER JOIN projetos p ON p.id = os.projeto_id
+INNER JOIN clientes c ON c.id = p.cliente_id
 LEFT JOIN funcionarios f ON f.id = os.responsavel_id
-LEFT JOIN sla_config s ON s.tipo = os.tipo AND s.criticidade = os.criticidade
 LEFT JOIN (SELECT os_id, SUM(duracao_minutos) AS total_minutos
            FROM apontamento_horas GROUP BY os_id) h ON h.os_id = os.id;
 
@@ -53,7 +31,6 @@ INNER JOIN clientes c ON c.id = p.cliente_id
 LEFT JOIN ordens_servico os ON os.projeto_id = p.id
 GROUP BY p.id, p.nome, p.status, c.nome;
 
--- 4. FUNCTIONS (6)
 DELIMITER $$
 
 CREATE FUNCTION fn_total_horas_os(p_os_id INT)
@@ -69,11 +46,10 @@ CREATE FUNCTION fn_quantidade_os_funcionario(p_funcionario_id INT)
 RETURNS INT NOT DETERMINISTIC READS SQL DATA
 BEGIN
   DECLARE v_total INT DEFAULT 0;
-  SELECT COUNT(*) INTO v_total FROM equipes WHERE funcionario_id = p_funcionario_id;
+  SELECT COUNT(*) INTO v_total FROM ordens_servico WHERE responsavel_id = p_funcionario_id;
   RETURN v_total;
 END$$
 
--- retorna 'NAO ENCONTRADO' quando o cliente não existe (antes retornava 'INATIVO')
 CREATE FUNCTION fn_status_cliente(p_cliente_id INT)
 RETURNS VARCHAR(20) NOT DETERMINISTIC READS SQL DATA
 BEGIN
@@ -97,9 +73,11 @@ CREATE FUNCTION fn_os_atrasadas_cliente(p_cliente_id INT)
 RETURNS INT NOT DETERMINISTIC READS SQL DATA
 BEGIN
   DECLARE v_total INT DEFAULT 0;
-  SELECT COUNT(*) INTO v_total FROM ordens_servico
-  WHERE cliente_id = p_cliente_id AND status <> 'concluido'
-    AND data_limite_sla < CURRENT_TIMESTAMP;
+  SELECT COUNT(*) INTO v_total
+  FROM ordens_servico os
+  INNER JOIN projetos p ON p.id = os.projeto_id
+  WHERE p.cliente_id = p_cliente_id AND os.status <> 'concluido'
+    AND os.data_limite_sla < CURRENT_TIMESTAMP;
   RETURN v_total;
 END$$
 
@@ -114,13 +92,14 @@ BEGIN
   RETURN IF(v_total = 0, 0, (v_concluidas * 100.0) / v_total);
 END$$
 
--- 5. STORED PROCEDURES (6)
+-- STORED PROCEDURES
 CREATE PROCEDURE sp_listar_os_cliente(IN p_cliente_id INT)
 BEGIN
   SELECT os.id, os.titulo, os.status, os.criticidade, f.nome AS responsavel
   FROM ordens_servico os
+  INNER JOIN projetos p ON p.id = os.projeto_id
   LEFT JOIN funcionarios f ON f.id = os.responsavel_id
-  WHERE os.cliente_id = p_cliente_id
+  WHERE p.cliente_id = p_cliente_id
   ORDER BY os.data_criacao DESC;
 END$$
 
@@ -146,9 +125,6 @@ BEGIN
   SELECT LAST_INSERT_ID() AS apontamento_criado;
 END$$
 
--- A auditoria da mudança de status é gravada pelo trigger trg_os_auditoria_update.
--- A procedure só informa ao trigger quem fez a mudança e o motivo (variáveis de sessão),
--- evitando o registro duplicado que existia antes.
 CREATE PROCEDURE sp_atualizar_status_os(
   IN p_os_id INT, IN p_novo_status VARCHAR(30), IN p_funcionario_id INT,
   IN p_justificativa TEXT
@@ -223,14 +199,12 @@ BEGIN
   SELECT v_processadas AS ordens_processadas;
 END$$
 
--- 6. TRIGGERS (6)
--- Convenção: quem altera dados pode informar @app_funcionario_id e @app_justificativa
--- na sessão antes do UPDATE. Sem isso, a auditoria de mudança fica com funcionario_id NULL.
+-- TRIGGERS
 CREATE TRIGGER trg_os_auditoria_insert
 AFTER INSERT ON ordens_servico FOR EACH ROW
 BEGIN
   INSERT INTO auditoria(os_id, funcionario_id, acao, justificativa)
-  VALUES(NEW.id, COALESCE(@app_funcionario_id, NEW.solicitante_id), 'insercao',
+  VALUES(NEW.id, COALESCE(@app_funcionario_id, NEW.responsavel_id), 'insercao',
          COALESCE(@app_justificativa, 'Registro automático de criação da OS'));
 END$$
 
@@ -284,7 +258,6 @@ END$$
 
 DELIMITER ;
 
--- 7. CONSULTAS PARA DEMONSTRAR OS RESULTADOS (prints da avaliação)
 SELECT COUNT(*) AS total_clientes FROM clientes;
 SELECT COUNT(*) AS total_funcionarios FROM funcionarios;
 SELECT COUNT(*) AS total_ordens FROM ordens_servico;
@@ -311,7 +284,6 @@ SELECT id, os_id, funcionario_id, acao, dado_antigo, dado_novo, justificativa
 CALL sp_relatorio_horas_periodo('2026-10-01', '2026-10-31');
 CALL sp_processar_fila_os();
 
--- Verificação da quantidade de registros por tabela
 SELECT 'clientes' tabela, COUNT(*) registros FROM clientes
 UNION ALL SELECT 'departamentos', COUNT(*) FROM departamentos
 UNION ALL SELECT 'funcionarios', COUNT(*) FROM funcionarios
@@ -320,9 +292,6 @@ UNION ALL SELECT 'projetos', COUNT(*) FROM projetos
 UNION ALL SELECT 'ordens_servico', COUNT(*) FROM ordens_servico
 UNION ALL SELECT 'anexos', COUNT(*) FROM anexos
 UNION ALL SELECT 'auditoria', COUNT(*) FROM auditoria
-UNION ALL SELECT 'equipes', COUNT(*) FROM equipes
 UNION ALL SELECT 'apontamento_horas', COUNT(*) FROM apontamento_horas
 UNION ALL SELECT 'auditoria_projetos', COUNT(*) FROM auditoria_projetos
-UNION ALL SELECT 'projetos_departamentos', COUNT(*) FROM projetos_departamentos
-UNION ALL SELECT 'feriados', COUNT(*) FROM feriados
-UNION ALL SELECT 'sla_config', COUNT(*) FROM sla_config;
+UNION ALL SELECT 'projetos_departamentos', COUNT(*) FROM projetos_departamentos;
